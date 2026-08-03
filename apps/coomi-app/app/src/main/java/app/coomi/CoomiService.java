@@ -74,10 +74,56 @@ public class CoomiService extends Service {
         return filtered.toString();
     }
 
+    /**
+     * 在不依赖 Termux bash 的前提下执行一条简单命令，仅用于检测/修复 bash 本身。
+     * 使用系统 /system/bin/sh，不设置 Termux 环境变量。
+     */
+    private CommandResult execRaw(String command, int timeoutSec) {
+        try {
+            ProcessBuilder builder = new ProcessBuilder("/system/bin/sh", "-c", command);
+            builder.redirectErrorStream(true);
+            Process process = builder.start();
+            StringBuilder output = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) output.append(line).append('\n');
+            }
+            boolean exited = process.waitFor(timeoutSec, TimeUnit.SECONDS);
+            if (!exited) process.destroyForcibly();
+            int code = exited ? process.exitValue() : -1;
+            return new CommandResult(code == 0, output.toString().trim(), "", code);
+        } catch (Exception e) {
+            return new CommandResult(false, "", e.getMessage(), -1);
+        }
+    }
+
+    /**
+     * 检测 Termux bash 二进制是否可用（DT_HASH 兼容性）。
+     * 如果 linker 报告 "CANNOT LINK EXECUTABLE"，说明 bash 的 ELF hash 格式
+     * 不被当前 Android linker 支持，需要创建一个包装脚本。
+     */
+    private void ensureBashWorks() {
+        String bashPath = prefix() + "/bin/bash";
+        File bashFile = new File(bashPath);
+        if (!bashFile.isFile()) return;
+        // 尝试直接执行 bash — 如果失败说明 linker 不兼容
+        CommandResult check = execRaw(bashPath + " -c 'echo ok'", 10);
+        if (check.success) return;
+        if (!check.stdout.contains("CANNOT LINK") && !check.stderr.contains("CANNOT LINK")) {
+            return; // 其它原因失败，不做处理
+        }
+        Logger.logInfo(LOG_TAG, "bash 存在 DT_HASH 兼容性问题，创建包装脚本");
+        // 把原 bash 二进制移走，用系统 shell 脚本取代
+        execRaw("mv " + shellQuote(bashPath) + " " + shellQuote(bashPath + ".orig"), 5);
+        execRaw("echo '#!/system/bin/sh' > " + shellQuote(bashPath), 5);
+        execRaw("echo 'exec /system/bin/sh \"$@\"' >> " + shellQuote(bashPath), 5);
+        execRaw("chmod 755 " + shellQuote(bashPath), 5);
+    }
+
     private CommandResult execTermux(String command, int timeoutSec) {
         try {
             String shell = termuxEnvironment()
-                + "exec " + shellQuote(prefix() + "/bin/bash") + " -lc " + shellQuote(command);
+                + "exec /system/bin/sh -c " + shellQuote(command);
             ProcessBuilder builder = new ProcessBuilder("/system/bin/sh", "-c", shell);
             builder.redirectErrorStream(true);
             Process process = builder.start();
@@ -165,6 +211,9 @@ public class CoomiService extends Service {
 
     /** Install Node.js, npm, and npx via Termux's pkg manager. */
     public CommandResult installNodeJs() {
+        // 确保 bash 可用（DT_HASH 兼容性）
+        ensureBashWorks();
+
         // 修复 Termux bootstrap 脚本的 shebang（bootstrap 硬编码了
         // /data/data/com.termux/，而本应用包名为 com.coomi.android，导致
         // pkg/apt 等 shell 脚本因 shebang 路径错误而无法执行）。
@@ -248,6 +297,9 @@ public class CoomiService extends Service {
             }
             mUpdateInProgress = true;
             try {
+                // 先检测 bash 二进制是否可用（DT_HASH 兼容性），不可用时创建包装脚本
+                ensureBashWorks();
+
                 File binary = nativeBinary();
                 File web = ensureCurrentWebAssets();
                 if (!binary.isFile()) {
