@@ -151,6 +151,15 @@ public class CoomiService extends Service {
 
     /** Install Node.js, npm, and npx via Termux's pkg manager. */
     public CommandResult installNodeJs() {
+        // 修复 Termux bootstrap 脚本的 shebang（bootstrap 硬编码了
+        // /data/data/com.termux/，而本应用包名为 com.coomi.android，导致
+        // pkg/apt 等 shell 脚本因 shebang 路径错误而无法执行）。
+        execTermux(
+            "for f in $(grep -lsr '/data/data/com.termux/' "
+            + shellQuote(prefix() + "/bin") + " 2>/dev/null); do "
+            + "sed -i '1s|/data/data/com.termux/|/data/data/com.coomi.android/|' \"$f\"; done",
+            30);
+
         // 分两步：先更新包索引，再安装 nodejs。
         // 使用 DEBIAN_FRONTEND=noninteractive 避免交互式配置提示。
         // execTermux 已通过 redirectErrorStream(true) 合并 stderr，命令中无需 2>&1。
