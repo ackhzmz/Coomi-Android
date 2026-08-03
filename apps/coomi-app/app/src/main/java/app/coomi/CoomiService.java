@@ -45,10 +45,12 @@ public class CoomiService extends Service {
 
     /** Termux 环境变量前缀，不含 shell 命令。适用于 execTermux 和 getVersion 等静态场景。 */
     private static String termuxEnvironment() {
+        // 注意：PATH 中 /system/bin 放在 $PREFIX/bin 前面，确保系统命令（mkdir、id 等）
+        // 优先于 Termux coreutils（coreutils 可能因 DT_HASH 兼容性问题而无法链接）。
         return "export HOME=" + shellQuote(home())
             + " PREFIX=" + shellQuote(prefix())
             + " TMPDIR=" + shellQuote(prefix() + "/tmp")
-            + " PATH=" + shellQuote(prefix() + "/bin:/system/bin")
+            + " PATH=/system/bin:" + shellQuote(prefix() + "/bin:/system/bin")
             + " LD_LIBRARY_PATH=" + shellQuote(prefix() + "/lib")
             + " LD_PRELOAD=" + shellQuote(preload())
             + " COOMI_HOME=" + shellQuote(CoomiConstants.COOMI_CONFIG_DIR)
@@ -99,25 +101,17 @@ public class CoomiService extends Service {
 
     /**
      * 检测 Termux bash 二进制是否可用（DT_HASH 兼容性）。
-     * 如果 linker 报告 "CANNOT LINK EXECUTABLE"，说明 bash 的 ELF hash 格式
-     * 不被当前 Android linker 支持，需要创建一个包装脚本。
+     * 注意：不创建包装脚本，因为 pkg 等脚本使用 bash 特有的 =~ 运算符，
+     * 而 /system/bin/sh（mksh）不支持它。
      */
     private void ensureBashWorks() {
         String bashPath = prefix() + "/bin/bash";
-        File bashFile = new File(bashPath);
-        if (!bashFile.isFile()) return;
-        // 尝试直接执行 bash — 如果失败说明 linker 不兼容
+        if (!new File(bashPath).isFile()) return;
         CommandResult check = execRaw(bashPath + " -c 'echo ok'", 10);
         if (check.success) return;
-        if (!check.stdout.contains("CANNOT LINK") && !check.stderr.contains("CANNOT LINK")) {
-            return; // 其它原因失败，不做处理
+        if (check.stdout.contains("CANNOT LINK") || check.stderr.contains("CANNOT LINK")) {
+            Logger.logInfo(LOG_TAG, "bash 存在 DT_HASH 兼容性问题，将使用系统命令替代");
         }
-        Logger.logInfo(LOG_TAG, "bash 存在 DT_HASH 兼容性问题，创建包装脚本");
-        // 把原 bash 二进制移走，用系统 shell 脚本取代
-        execRaw("mv " + shellQuote(bashPath) + " " + shellQuote(bashPath + ".orig"), 5);
-        execRaw("echo '#!/system/bin/sh' > " + shellQuote(bashPath), 5);
-        execRaw("echo 'exec /system/bin/sh \"$@\"' >> " + shellQuote(bashPath), 5);
-        execRaw("chmod 755 " + shellQuote(bashPath), 5);
     }
 
     private CommandResult execTermux(String command, int timeoutSec) {
@@ -209,37 +203,75 @@ public class CoomiService extends Service {
         return "";
     }
 
-    /** Install Node.js, npm, and npx via Termux's pkg manager. */
+    /** Install Node.js, npm, and npx by downloading the official ARM64 binary. */
     public CommandResult installNodeJs() {
-        // 确保 bash 可用（DT_HASH 兼容性）
         ensureBashWorks();
 
-        // 修复 Termux bootstrap 脚本的 shebang（bootstrap 硬编码了
-        // /data/data/com.termux/，而本应用包名为 com.coomi.android，导致
-        // pkg/apt 等 shell 脚本因 shebang 路径错误而无法执行）。
-        execTermux(
-            "for f in $(grep -rsl '/data/data/com.termux/' "
-            + shellQuote(prefix() + "/bin") + " "
-            + shellQuote(prefix() + "/libexec") + " "
-            + shellQuote(prefix() + "/share") + " 2>/dev/null); do "
-            + "sed -i 's|/data/data/com.termux/|/data/data/com.coomi.android/|g' \"$f\"; done",
-            30);
+        String nodeVersion = "v18.19.0";
+        String fileName = "node-" + nodeVersion + "-linux-arm64.tar.xz";
+        String url = "https://nodejs.org/dist/" + nodeVersion + "/" + fileName;
+        File tempFile = new File(getCacheDir(), fileName);
+        String destDir = prefix();
 
-        // 分两步：先更新包索引，再安装 nodejs。
-        // 使用 DEBIAN_FRONTEND=noninteractive 避免交互式配置提示。
-        // execTermux 已通过 redirectErrorStream(true) 合并 stderr，命令中无需 2>&1。
-        // pkg 操作在网络慢时可能超过 30 秒，使用 120 秒超时。
-        CommandResult update = execTermux(
-            "DEBIAN_FRONTEND=noninteractive pkg update -y", 120);
-        if (!update.success) {
-            Logger.logInfo(LOG_TAG, "pkg update failed (non-fatal): " + update.stdout);
+        // 1. Download the tarball using Java's HTTP client
+        Logger.logInfo(LOG_TAG, "Downloading Node.js from " + url);
+        try {
+            HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+            conn.setConnectTimeout(30000);
+            conn.setReadTimeout(120000);
+            conn.setInstanceFollowRedirects(true);
+            try (java.io.InputStream in = conn.getInputStream();
+                 java.io.FileOutputStream out = new java.io.FileOutputStream(tempFile)) {
+                byte[] buf = new byte[8192];
+                int len;
+                while ((len = in.read(buf)) != -1) out.write(buf, 0, len);
+            }
+            conn.disconnect();
+        } catch (Exception e) {
+            tempFile.delete();
+            Logger.logError(LOG_TAG, "Failed to download Node.js: " + e.getMessage());
+            return new CommandResult(false, "", "下载 Node.js 失败：" + e.getMessage(), -1);
         }
-        CommandResult install = execTermux(
-            "DEBIAN_FRONTEND=noninteractive pkg install -y nodejs", 120);
-        if (!install.success) {
-            return install;
+
+        // 2. Extract the tarball — try multiple methods
+        Logger.logInfo(LOG_TAG, "Extracting Node.js to " + destDir);
+        boolean extracted = false;
+        // Method 1: tar with xz support (Android 10+ toybox)
+        if (execRaw("tar -xJf " + shellQuote(tempFile.getAbsolutePath())
+            + " -C " + shellQuote(destDir) + " --strip-components=1 2>/dev/null", 120).success) {
+            extracted = true;
         }
-        // 验证 node、npm、npx 都已就绪
+        // Method 2: xz + tar pipe
+        if (!extracted && execRaw(
+            "xz -d -c " + shellQuote(tempFile.getAbsolutePath()) + " 2>/dev/null"
+            + " | tar -xf - -C " + shellQuote(destDir) + " --strip-components=1 2>/dev/null", 120).success) {
+            extracted = true;
+        }
+        // Method 3: busybox tar
+        if (!extracted && execRaw(
+            "busybox tar -xJf " + shellQuote(tempFile.getAbsolutePath())
+            + " -C " + shellQuote(destDir) + " --strip-components=1 2>/dev/null", 120).success) {
+            extracted = true;
+        }
+        // Method 4: check if files already exist (maybe extracted by a previous method)
+        if (!extracted) {
+            CommandResult check = execRaw("ls " + shellQuote(destDir + "/bin/node") + " 2>/dev/null", 10);
+            extracted = check.success;
+        }
+
+        tempFile.delete();
+
+        if (!extracted) {
+            return new CommandResult(false, "",
+                "Node.js 下载成功但解压失败，系统缺少 tar/xz 工具。", -1);
+        }
+
+        // 3. Make node/npm/npx executable
+        execRaw("chmod +x " + shellQuote(destDir + "/bin/node")
+            + " " + shellQuote(destDir + "/bin/npm")
+            + " " + shellQuote(destDir + "/bin/npx") + " 2>/dev/null", 10);
+
+        // 4. Verify installation
         CommandResult nodeVer = execTermux("node --version");
         if (!nodeVer.success || nodeVer.stdout.trim().isEmpty()) {
             return new CommandResult(false, nodeVer.stdout, "node --version 返回空", -1);
