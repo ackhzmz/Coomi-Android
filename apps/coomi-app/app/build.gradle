@@ -293,6 +293,8 @@ tasks.register("stageCoomiNodeJs") {
             project.delete(project.fileTree(finalDir) { include "share/man/**", "share/doc/**" })
 
             // 4. Create nodejs.zip (will be extracted to $PREFIX)
+            // Ensure the assets directory exists (may not exist if stageCoomiWeb is skipped)
+            coomiNodeJsAsset.parentFile.mkdirs()
             logger.quiet("Creating nodejs.zip ...")
             runCmd(["zip", "-r", "-q", coomiNodeJsAsset.absolutePath, "."], finalDir)
             logger.quiet("nodejs.zip created: ${coomiNodeJsAsset.length()} bytes")
