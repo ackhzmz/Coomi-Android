@@ -1,0 +1,90 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "com.maker.app"
+
+    defaultConfig {
+        applicationId "com.maker.app"
+        minSdkVersion 24
+        targetSdkVersion 28
+        versionCode 1
+        versionName "1.0.0"
+    }
+
+    compileSdkVersion project.properties.compileSdkVersion.toInteger()
+
+    dependencies {
+        implementation "androidx.appcompat:appcompat:1.6.1"
+        implementation "androidx.core:core:1.13.1"
+        implementation project(":terminal-view")
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging true
+        }
+    }
+}
+
+/** Node.js ARM64 binary asset — packaged in APK so no runtime download is needed. */
+def nodeJsAsset = file("src/main/assets/nodejs.zip")
+def nodeVersion = "v18.19.0"
+def nodeFileName = "node-${nodeVersion}-linux-arm64.tar.xz"
+def nodeUrl = "https://nodejs.org/dist/${nodeVersion}/${nodeFileName}"
+
+tasks.register("stageCoomiNodeJs") {
+    group = "maker build"
+    description = "Download Node.js ARM64 binaries and package as APK asset."
+    outputs.file(nodeJsAsset)
+    doLast {
+        if (nodeJsAsset.exists() && nodeJsAsset.length() > 0) {
+            logger.quiet("nodejs.zip already exists, skipping download")
+            return
+        }
+        def tmpDir = File.createTempDir("nodejs", "stage")
+        try {
+            def tarball = new File(tmpDir, nodeFileName)
+            logger.quiet("Downloading Node.js from ${nodeUrl} ...")
+            runCmd(["curl", "-fsSL", "--connect-timeout", "30",
+                "--max-time", "300", "-o", tarball.absolutePath, nodeUrl])
+            logger.quiet("Extracting ...")
+            runCmd(["tar", "-xJf", tarball.absolutePath, "--strip-components=1"], tmpDir)
+            // Remove man pages and large docs to reduce APK size
+            project.delete(project.fileTree(tmpDir) { include "share/man/**", "share/doc/**" })
+            logger.quiet("Creating nodejs.zip ...")
+            runCmd(["zip", "-r", "-q", nodeJsAsset.absolutePath, "."], tmpDir)
+            logger.quiet("nodejs.zip created: ${nodeJsAsset.length()} bytes")
+        } finally {
+            project.delete(tmpDir)
+        }
+    }
+}
+
+def runCmd(List<String> cmd, File workDir = null) {
+    def proc = cmd.execute(null, workDir)
+    def output = new StringBuffer()
+    def error = new StringBuffer()
+    proc.consumeProcessOutput(output, error)
+    proc.waitFor()
+    if (proc.exitValue() != 0) {
+        throw new GradleException("Command failed (exit=${proc.exitValue()}): ${cmd[0]}\n${error}")
+    }
+}
+
+tasks.named("preBuild").configure {
+    dependsOn "stageCoomiNodeJs"
+}

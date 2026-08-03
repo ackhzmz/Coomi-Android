@@ -20,6 +20,7 @@ build/
 apps/coomi-app/app/src/main/assets/web.zip
 apps/coomi-app/app/src/main/assets/nodejs.zip
 apps/coomi-app/app/src/main/jniLibs/
+maker-app/src/main/assets/nodejs.zip
 
 # ---- Rust ----
 apps/coomi-rs/target/

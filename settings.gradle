@@ -36,3 +36,6 @@ project(':terminal-emulator').projectDir = file('apps/coomi-app/terminal-emulato
 
 include ':terminal-view'
 project(':terminal-view').projectDir = file('apps/coomi-app/terminal-view')
+
+include ':maker-app'
+project(':maker-app').projectDir = file('apps/maker-app')
