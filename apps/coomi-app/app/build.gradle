@@ -225,26 +225,29 @@ tasks.register("stageCoomiNodeJs") {
         try {
             def tarball = new File(tmpDir, coomiNodeFileName)
             logger.quiet("Downloading Node.js from ${coomiNodeUrl} ...")
-            project.exec {
-                commandLine "curl", "-fsSL", "--connect-timeout", "30",
-                    "--max-time", "300", "-o", tarball.absolutePath, coomiNodeUrl
-            }
+            runCmd(["curl", "-fsSL", "--connect-timeout", "30",
+                "--max-time", "300", "-o", tarball.absolutePath, coomiNodeUrl])
             logger.quiet("Extracting ...")
-            project.exec {
-                workingDir tmpDir
-                commandLine "tar", "-xJf", tarball.name, "--strip-components=1"
-            }
+            runCmd(["tar", "-xJf", tarball.absolutePath, "--strip-components=1"], tmpDir)
             // Remove man pages and large docs to reduce APK size
             project.delete(project.fileTree(tmpDir) { include "share/man/**", "share/doc/**" })
             logger.quiet("Creating nodejs.zip ...")
-            project.exec {
-                workingDir tmpDir
-                commandLine "zip", "-r", "-q", coomiNodeJsAsset.absolutePath, "."
-            }
+            runCmd(["zip", "-r", "-q", coomiNodeJsAsset.absolutePath, "."], tmpDir)
             logger.quiet("nodejs.zip created: ${coomiNodeJsAsset.length()} bytes")
         } finally {
             project.delete(tmpDir)
         }
+    }
+}
+
+def runCmd(List<String> cmd, File workDir = null) {
+    def proc = cmd.execute(null, workDir)
+    def output = new StringBuffer()
+    def error = new StringBuffer()
+    proc.consumeProcessOutput(output, error)
+    proc.waitFor()
+    if (proc.exitValue() != 0) {
+        throw new GradleException("Command failed (exit=${proc.exitValue()}): ${cmd[0]}\n${error}")
     }
 }
 
