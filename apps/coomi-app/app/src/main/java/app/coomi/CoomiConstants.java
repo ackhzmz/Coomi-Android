@@ -32,6 +32,7 @@ public final class CoomiConstants {
     // Bootstrap / Rust runtime
     public static final String WEB_ASSET = "web.zip";
     public static final String WEB_DIR_BASENAME = "web";
+    public static final String NODEJS_ASSET = "nodejs.zip";
     public static final String NATIVE_BINARY_NAME = "libcoomi.so";
     public static final String COOMI_SHARED_ROOT = TermuxConstants.TERMUX_PREFIX_DIR_PATH + "/share/coomi";
     public static final String COOMI_OFFLINE_ROOT = COOMI_SHARED_ROOT + "/offline";

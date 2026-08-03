@@ -203,67 +203,32 @@ public class CoomiService extends Service {
         return "";
     }
 
-    /** Install Node.js, npm, and npx by downloading the official ARM64 binary. */
+    /** Install Node.js, npm, and npx by extracting from APK assets. */
     public CommandResult installNodeJs() {
         ensureBashWorks();
 
-        String nodeVersion = "v18.19.0";
-        String fileName = "node-" + nodeVersion + "-linux-arm64.tar.xz";
-        String url = "https://nodejs.org/dist/" + nodeVersion + "/" + fileName;
-        File tempFile = new File(getCacheDir(), fileName);
         String destDir = prefix();
+        File nodeBin = new File(destDir + "/bin/node");
 
-        // 1. Download the tarball using Java's HTTP client
-        Logger.logInfo(LOG_TAG, "Downloading Node.js from " + url);
-        try {
-            HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
-            conn.setConnectTimeout(30000);
-            conn.setReadTimeout(120000);
-            conn.setInstanceFollowRedirects(true);
-            try (java.io.InputStream in = conn.getInputStream();
-                 java.io.FileOutputStream out = new java.io.FileOutputStream(tempFile)) {
-                byte[] buf = new byte[8192];
-                int len;
-                while ((len = in.read(buf)) != -1) out.write(buf, 0, len);
+        // 1. Check if node already exists
+        if (nodeBin.isFile()) {
+            CommandResult nodeVer = execTermux("node --version");
+            if (nodeVer.success && !nodeVer.stdout.trim().isEmpty()) {
+                Logger.logInfo(LOG_TAG, "Node.js already installed: " + nodeVer.stdout.trim());
+                return nodeVer;
             }
-            conn.disconnect();
-        } catch (Exception e) {
-            tempFile.delete();
-            Logger.logError(LOG_TAG, "Failed to download Node.js: " + e.getMessage());
-            return new CommandResult(false, "", "下载 Node.js 失败：" + e.getMessage(), -1);
         }
 
-        // 2. Extract the tarball — try multiple methods
-        Logger.logInfo(LOG_TAG, "Extracting Node.js to " + destDir);
-        boolean extracted = false;
-        // Method 1: tar with xz support (Android 10+ toybox)
-        if (execRaw("tar -xJf " + shellQuote(tempFile.getAbsolutePath())
-            + " -C " + shellQuote(destDir) + " --strip-components=1 2>/dev/null", 120).success) {
-            extracted = true;
-        }
-        // Method 2: xz + tar pipe
-        if (!extracted && execRaw(
-            "xz -d -c " + shellQuote(tempFile.getAbsolutePath()) + " 2>/dev/null"
-            + " | tar -xf - -C " + shellQuote(destDir) + " --strip-components=1 2>/dev/null", 120).success) {
-            extracted = true;
-        }
-        // Method 3: busybox tar
-        if (!extracted && execRaw(
-            "busybox tar -xJf " + shellQuote(tempFile.getAbsolutePath())
-            + " -C " + shellQuote(destDir) + " --strip-components=1 2>/dev/null", 120).success) {
-            extracted = true;
-        }
-        // Method 4: check if files already exist (maybe extracted by a previous method)
-        if (!extracted) {
-            CommandResult check = execRaw("ls " + shellQuote(destDir + "/bin/node") + " 2>/dev/null", 10);
-            extracted = check.success;
-        }
-
-        tempFile.delete();
-
-        if (!extracted) {
+        // 2. Extract nodejs.zip from APK assets to $PREFIX/
+        Logger.logInfo(LOG_TAG, "Extracting Node.js from APK assets to " + destDir);
+        if (!CoomiBootstrap.assetExists(this, CoomiConstants.NODEJS_ASSET)) {
             return new CommandResult(false, "",
-                "Node.js 下载成功但解压失败，系统缺少 tar/xz 工具。", -1);
+                "APK 中缺少 nodejs.zip，请重新安装。", -1);
+        }
+        int count = CoomiBootstrap.deployZipAsset(this, CoomiConstants.NODEJS_ASSET, new File(destDir));
+        if (count <= 0 || !nodeBin.isFile()) {
+            return new CommandResult(false, "",
+                "APK 中 nodejs.zip 解压失败。", -1);
         }
 
         // 3. Make node/npm/npx executable
@@ -271,7 +236,20 @@ public class CoomiService extends Service {
             + " " + shellQuote(destDir + "/bin/npm")
             + " " + shellQuote(destDir + "/bin/npx") + " 2>/dev/null", 10);
 
-        // 4. Verify installation
+        // 4. Create npm/npx wrapper scripts if the symlinks are broken
+        // (Node.js ships npm/npx as symlinks to lib/node_modules/npm/bin/...)
+        String npmScript = destDir + "/lib/node_modules/npm/bin/npm-cli.js";
+        String npxScript = destDir + "/lib/node_modules/npm/bin/npx-cli.js";
+        File npmBin = new File(destDir + "/bin/npm");
+        if (!npmBin.isFile() || !npmBin.canExecute()) {
+            createNodeWrapper("npm", npmScript, nodeBin);
+        }
+        File npxBin = new File(destDir + "/bin/npx");
+        if (!npxBin.isFile() || !npxBin.canExecute()) {
+            createNodeWrapper("npx", npxScript, nodeBin);
+        }
+
+        // 5. Verify installation
         CommandResult nodeVer = execTermux("node --version");
         if (!nodeVer.success || nodeVer.stdout.trim().isEmpty()) {
             return new CommandResult(false, nodeVer.stdout, "node --version 返回空", -1);
@@ -287,6 +265,17 @@ public class CoomiService extends Service {
         Logger.logInfo(LOG_TAG, "Node.js 安装完成: node=" + nodeVer.stdout.trim()
             + " npm=" + npmVer.stdout.trim() + " npx=" + npxVer.stdout.trim());
         return nodeVer;
+    }
+
+    /** Create a node-based wrapper script for npm/npx if the symlink is broken. */
+    private void createNodeWrapper(String name, String scriptPath, File nodeBin) {
+        String wrapper = prefix() + "/bin/" + name;
+        String content = "#!/system/bin/sh\nexec " + nodeBin.getAbsolutePath()
+            + " " + scriptPath + " \"$@\"\n";
+        try {
+            execRaw("cat > " + shellQuote(wrapper) + " << 'COOMI_EOF'\n"
+                + content + "COOMI_EOF\n" + "chmod +x " + shellQuote(wrapper), 10);
+        } catch (Exception ignored) {}
     }
 
     /** Check Node.js version. Returns "x.y.z" or empty string if not installed. */

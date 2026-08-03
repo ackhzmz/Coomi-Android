@@ -206,6 +206,48 @@ def coomiNdkToolchain = new File(android.sdkDirectory,
 def coomiAndroidLinker = new File(coomiNdkToolchain,
     "aarch64-linux-android${android.defaultConfig.minSdkVersion.apiLevel}-clang${coomiExeExt}")
 
+/** Node.js ARM64 binary asset — packaged in APK so no runtime download is needed. */
+def coomiNodeJsAsset = file("src/main/assets/nodejs.zip")
+def coomiNodeVersion = "v18.19.0"
+def coomiNodeFileName = "node-${coomiNodeVersion}-linux-arm64.tar.xz"
+def coomiNodeUrl = "https://nodejs.org/dist/${coomiNodeVersion}/${coomiNodeFileName}"
+
+tasks.register("stageCoomiNodeJs") {
+    group = "coomi build"
+    description = "Download Node.js ARM64 binaries and package as APK asset."
+    outputs.file(coomiNodeJsAsset)
+    doLast {
+        if (coomiNodeJsAsset.exists() && coomiNodeJsAsset.length() > 0) {
+            logger.quiet("nodejs.zip already exists, skipping download")
+            return
+        }
+        def tmpDir = File.createTempDir("nodejs", "stage")
+        try {
+            def tarball = new File(tmpDir, coomiNodeFileName)
+            logger.quiet("Downloading Node.js from ${coomiNodeUrl} ...")
+            exec {
+                commandLine "curl", "-fsSL", "--connect-timeout", "30",
+                    "--max-time", "300", "-o", tarball.absolutePath, coomiNodeUrl
+            }
+            logger.quiet("Extracting ...")
+            exec {
+                workingDir tmpDir
+                commandLine "tar", "-xJf", tarball.name, "--strip-components=1"
+            }
+            // Remove man pages and large docs to reduce APK size
+            delete(fileTree(tmpDir) { include "share/man/**", "share/doc/**" })
+            logger.quiet("Creating nodejs.zip ...")
+            exec {
+                workingDir tmpDir
+                commandLine "zip", "-r", "-q", coomiNodeJsAsset.absolutePath, "."
+            }
+            logger.quiet("nodejs.zip created: ${coomiNodeJsAsset.length()} bytes")
+        } finally {
+            delete(tmpDir)
+        }
+    }
+}
+
 tasks.register("installCoomiRustAndroidTarget", Exec) {
     group = "coomi build"
     description = "Install the Rust ARM64 Android standard library."
@@ -268,7 +310,7 @@ tasks.register("stageCoomiRustAndroid", Copy) {
 }
 
 tasks.named("preBuild").configure {
-    dependsOn "stageCoomiWeb", "stageCoomiRustAndroid"
+    dependsOn "stageCoomiWeb", "stageCoomiRustAndroid", "stageCoomiNodeJs"
 }
 
 task versionName {
