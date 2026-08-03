@@ -53,12 +53,10 @@ jobs:
         run: npm ci
 
       - name: Make Gradle wrapper executable
-        working-directory: apps/coomi-app
         run: chmod +x gradlew
 
       - name: Build APK
-        working-directory: apps/coomi-app
-        run: ./gradlew assembleDebug --no-daemon
+        run: ./gradlew :app:assembleDebug --no-daemon
         env:
           TERMUX_PACKAGE_VARIANT: "apt-android-7"
           TERMUX_APP_VERSION_NAME: ""
