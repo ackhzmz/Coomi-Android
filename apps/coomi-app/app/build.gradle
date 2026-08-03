@@ -254,37 +254,40 @@ tasks.register("stageCoomiNodeJs") {
             runCmd(["curl", "-fsSL", "--connect-timeout", "30",
                 "--max-time", "300", "-o", npmDeb.absolutePath, coomiNpmDebUrl])
 
-            // 2. Extract all debs into a staging directory
+            // 2. Extract all debs into a staging directory using dpkg-deb
+            //    dpkg-deb is more reliable than ar x + tar -xJf, and is pre-installed on Ubuntu.
+            //    Termux debs install to ./data/data/com.termux/files/usr/,
+            //    so we use --strip-components=5 to get usr/ contents directly.
             def stagingDir = new File(tmpDir, "staging")
             stagingDir.mkdirs()
 
             [nodeDeb, icuDeb, npmDeb].each { deb ->
+                logger.quiet("Extracting ${deb.name} ...")
                 def extractDir = new File(tmpDir, "extract_" + deb.name.replaceAll(/[^a-zA-Z0-9]/, "_"))
                 extractDir.mkdirs()
-                // ar x extracts: debian-binary, control.tar.xz, data.tar.xz
-                runCmd(["ar", "x", deb.absolutePath], extractDir)
-                def dataTar = new File(extractDir, "data.tar.xz")
-                if (dataTar.isFile()) {
-                    runCmd(["tar", "-xJf", dataTar.absolutePath, "-C", stagingDir.absolutePath])
+                // dpkg-deb -x extracts the package contents to the target directory
+                runCmd(["dpkg-deb", "-x", deb.absolutePath, extractDir.absolutePath])
+                // Termux debs use prefix: ./data/data/com.termux/files/usr/
+                def prefixDir = new File(extractDir, "data/data/com.termux/files/usr")
+                if (prefixDir.isDirectory()) {
+                    runCmd(["cp", "-r", prefixDir.absolutePath + "/.", stagingDir.absolutePath])
+                } else {
+                    // Some debs (like npm, arch=all) may have a different structure
+                    // Try looking for files directly in the extract dir
+                    def files = extractDir.listFiles()
+                    if (files != null) {
+                        files.each { f ->
+                            if (f.isDirectory() && f.name != "data") {
+                                runCmd(["cp", "-r", f.absolutePath, stagingDir.absolutePath])
+                            }
+                        }
+                    }
                 }
             }
 
-            // 3. Termux debs install to ./data/data/com.termux/files/usr/
-            //    Strip this prefix and keep only the usr/ contents
-            def termuxPrefix = "data/data/com.termux/files/usr"
-            def prefixDir = new File(stagingDir, termuxPrefix)
-            if (!prefixDir.isDirectory()) {
-                throw new GradleException(
-                    "Expected Termux prefix directory not found: ${prefixDir}\n" +
-                    "Contents: ${stagingDir.list()?.join(', ')}")
-            }
-
+            // 3. Move staging contents to final directory
             def finalDir = new File(tmpDir, "final")
-            if (!prefixDir.renameTo(finalDir)) {
-                // Fallback: copy recursively
-                runCmd(["cp", "-r", prefixDir.absolutePath, finalDir.absolutePath])
-                project.delete(prefixDir)
-            }
+            stagingDir.renameTo(finalDir)
 
             // Remove man pages and large docs to reduce APK size
             project.delete(project.fileTree(finalDir) { include "share/man/**", "share/doc/**" })
@@ -306,7 +309,7 @@ def runCmd(List<String> cmd, File workDir = null) {
     proc.consumeProcessOutput(output, error)
     proc.waitFor()
     if (proc.exitValue() != 0) {
-        throw new GradleException("Command failed (exit=${proc.exitValue()}): ${cmd[0]}\n${error}")
+        throw new GradleException("Command failed (exit=${proc.exitValue()}): ${cmd[0]}\nSTDOUT: ${output}\nSTDERR: ${error}")
     }
 }
 
