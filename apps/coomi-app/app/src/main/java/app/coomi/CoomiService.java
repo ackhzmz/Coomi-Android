@@ -61,6 +61,19 @@ public class CoomiService extends Service {
         return execTermux(command, CMD_TIMEOUT_SEC);
     }
 
+    /** 过滤掉 Termux linker 警告等干扰行，保留真正的输出内容。 */
+    private static String stripLinkerWarnings(String output) {
+        if (output == null || output.isEmpty()) return output;
+        StringBuilder filtered = new StringBuilder(output.length());
+        for (String line : output.split("\n")) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("WARNING: linker:")) continue;
+            if (filtered.length() > 0) filtered.append('\n');
+            filtered.append(line);
+        }
+        return filtered.toString();
+    }
+
     private CommandResult execTermux(String command, int timeoutSec) {
         try {
             String shell = termuxEnvironment()
@@ -76,7 +89,8 @@ public class CoomiService extends Service {
             boolean exited = process.waitFor(timeoutSec, TimeUnit.SECONDS);
             if (!exited) process.destroyForcibly();
             int code = exited ? process.exitValue() : -1;
-            return new CommandResult(code == 0, output.toString().trim(), "", code);
+            String cleaned = stripLinkerWarnings(output.toString().trim());
+            return new CommandResult(code == 0, cleaned, "", code);
         } catch (Exception e) {
             Logger.logError(LOG_TAG, "Termux command failed: " + e.getMessage());
             return new CommandResult(false, "", e.getMessage(), -1);
@@ -220,7 +234,7 @@ public class CoomiService extends Service {
             boolean exited = process.waitFor(CMD_TIMEOUT_SEC, TimeUnit.SECONDS);
             if (!exited) process.destroyForcibly();
             if (exited && process.exitValue() == 0) {
-                return output.toString().trim();
+                return stripLinkerWarnings(output.toString().trim());
             }
         } catch (Exception ignored) {}
         return "";

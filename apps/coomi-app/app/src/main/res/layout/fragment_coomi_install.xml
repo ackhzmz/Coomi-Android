@@ -375,11 +375,19 @@
                 android:text=""/>
 
             <Button
+                android:id="@+id/btn_install_copy_log"
+                style="@style/Coomi.Button.Outline"
+                android:layout_width="match_parent"
+                android:layout_height="36dp"
+                android:layout_marginTop="@dimen/coomi_space_m"
+                android:text="@string/coomi_install_copy_log"/>
+
+            <Button
                 android:id="@+id/btn_install_retry"
                 style="@style/Coomi.Button.Outline"
                 android:layout_width="match_parent"
                 android:layout_height="@dimen/coomi_button_height"
-                android:layout_marginTop="@dimen/coomi_space_l"
+                android:layout_marginTop="@dimen/coomi_space_m"
                 android:text="@string/coomi_install_retry"/>
         </LinearLayout>
 

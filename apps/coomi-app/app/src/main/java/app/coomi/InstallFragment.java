@@ -1,6 +1,8 @@
 package app.coomi;
 
 import android.app.Activity;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -11,9 +13,11 @@ import android.text.method.ScrollingMovementMethod;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.ProgressBar;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -88,6 +92,16 @@ public class InstallFragment extends Fragment implements CoomiSetupActivity.Step
         mPhaseViews[PHASE_BASE] = phaseViews(view, R.id.install_p1_ring, R.id.install_p1_spinner, R.id.install_p1_check);
         mPhaseViews[PHASE_RUNTIME] = phaseViews(view, R.id.install_p2_ring, R.id.install_p2_spinner, R.id.install_p2_check);
         mPhaseViews[PHASE_ENGINE] = phaseViews(view, R.id.install_p3_ring, R.id.install_p3_spinner, R.id.install_p3_check);
+
+        Button btnCopyLog = view.findViewById(R.id.btn_install_copy_log);
+        btnCopyLog.setOnClickListener(ignored -> {
+            String logText = mErrorDetail.getText().toString();
+            if (logText.isEmpty()) return;
+            ClipboardManager clipboard = (ClipboardManager) requireContext()
+                .getSystemService(Context.CLIPBOARD_SERVICE);
+            clipboard.setPrimaryClip(ClipData.newPlainText("Coomi 部署日志", logText));
+            Toast.makeText(requireContext(), R.string.coomi_install_copy_log_done, Toast.LENGTH_SHORT).show();
+        });
 
         view.findViewById(R.id.btn_install_retry).setOnClickListener(ignored -> {
             if (CoomiDemo.isEnabled()) {

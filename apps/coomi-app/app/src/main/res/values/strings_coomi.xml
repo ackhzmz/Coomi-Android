@@ -42,6 +42,8 @@
     <string name="coomi_install_error_title">部署失败</string>
     <string name="coomi_install_error_hint">多数失败是网络问题，切换网络后重试即可。</string>
     <string name="coomi_install_retry">重新部署</string>
+    <string name="coomi_install_copy_log">复制日志</string>
+    <string name="coomi_install_copy_log_done">已复制</string>
     <string name="coomi_install_waiting">准备中…</string>
     <string name="coomi_install_running">正在处理：%1$s</string>
     <string name="coomi_install_unknown_error">未知错误</string>
