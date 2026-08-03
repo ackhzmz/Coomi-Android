@@ -290,7 +290,8 @@ tasks.register("stageCoomiNodeJs") {
             stagingDir.renameTo(finalDir)
 
             // Remove man pages and large docs to reduce APK size
-            project.delete(project.fileTree(finalDir) { include "share/man/**", "share/doc/**" })
+            // Use runCmd instead of project.delete() to avoid symlink resolution issues
+            runCmd(["rm", "-rf", new File(finalDir, "share/man").absolutePath, new File(finalDir, "share/doc").absolutePath])
 
             // 4. Create nodejs.zip (will be extracted to $PREFIX)
             // Ensure the assets directory exists (may not exist if stageCoomiWeb is skipped)
