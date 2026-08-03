@@ -225,25 +225,25 @@ tasks.register("stageCoomiNodeJs") {
         try {
             def tarball = new File(tmpDir, coomiNodeFileName)
             logger.quiet("Downloading Node.js from ${coomiNodeUrl} ...")
-            exec {
+            project.exec {
                 commandLine "curl", "-fsSL", "--connect-timeout", "30",
                     "--max-time", "300", "-o", tarball.absolutePath, coomiNodeUrl
             }
             logger.quiet("Extracting ...")
-            exec {
+            project.exec {
                 workingDir tmpDir
                 commandLine "tar", "-xJf", tarball.name, "--strip-components=1"
             }
             // Remove man pages and large docs to reduce APK size
-            delete(fileTree(tmpDir) { include "share/man/**", "share/doc/**" })
+            project.delete(project.fileTree(tmpDir) { include "share/man/**", "share/doc/**" })
             logger.quiet("Creating nodejs.zip ...")
-            exec {
+            project.exec {
                 workingDir tmpDir
                 commandLine "zip", "-r", "-q", coomiNodeJsAsset.absolutePath, "."
             }
             logger.quiet("nodejs.zip created: ${coomiNodeJsAsset.length()} bytes")
         } finally {
-            delete(tmpDir)
+            project.delete(tmpDir)
         }
     }
 }
