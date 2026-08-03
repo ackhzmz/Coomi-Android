@@ -155,9 +155,11 @@ public class CoomiService extends Service {
         // /data/data/com.termux/，而本应用包名为 com.coomi.android，导致
         // pkg/apt 等 shell 脚本因 shebang 路径错误而无法执行）。
         execTermux(
-            "for f in $(grep -lsr '/data/data/com.termux/' "
-            + shellQuote(prefix() + "/bin") + " 2>/dev/null); do "
-            + "sed -i '1s|/data/data/com.termux/|/data/data/com.coomi.android/|' \"$f\"; done",
+            "for f in $(grep -rsl '/data/data/com.termux/' "
+            + shellQuote(prefix() + "/bin") + " "
+            + shellQuote(prefix() + "/libexec") + " "
+            + shellQuote(prefix() + "/share") + " 2>/dev/null); do "
+            + "sed -i 's|/data/data/com.termux/|/data/data/com.coomi.android/|g' \"$f\"; done",
             30);
 
         // 分两步：先更新包索引，再安装 nodejs。
