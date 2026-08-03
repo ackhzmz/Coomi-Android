@@ -1,4 +1,4 @@
-name: Build Maker App APK
+name: Build Coomi APK
 
 on:
   push:
@@ -32,15 +32,23 @@ jobs:
             -dname "CN=Android Debug,O=Android,C=US" \
             -storepass android -keypass android
 
+      - name: Set up Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
       - name: Make Gradle wrapper executable
         run: chmod +x gradlew
 
-      - name: Build Maker App APK
-        run: ./gradlew :maker-app:assembleDebug --no-daemon
+      - name: Build Coomi APK
+        run: ./gradlew :app:assembleDebug --no-daemon -x stageCoomiWeb -x stageCoomiRustAndroid
+        env:
+          TERMUX_PACKAGE_VARIANT: apt-android-7
+          TERMUX_APP_VERSION_NAME: 1.2.1
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: maker-app-debug
-          path: apps/maker-app/build/outputs/apk/debug/*.apk
+          name: coomi-app-debug
+          path: apps/coomi-app/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error

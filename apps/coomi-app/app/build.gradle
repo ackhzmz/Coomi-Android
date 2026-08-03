@@ -206,15 +206,30 @@ def coomiNdkToolchain = new File(android.sdkDirectory,
 def coomiAndroidLinker = new File(coomiNdkToolchain,
     "aarch64-linux-android${android.defaultConfig.minSdkVersion.apiLevel}-clang${coomiExeExt}")
 
-/** Node.js ARM64 binary asset — packaged in APK so no runtime download is needed. */
+/**
+ * Node.js ARM64 binary asset — packaged in APK so no runtime download is needed.
+ *
+ * Uses the Termux nodejs-lts package, which is compiled for Android (Bionic libc),
+ * unlike the standard nodejs.org binary (glibc) that cannot run on Android.
+ * Also bundles libicu and npm as required dependencies.
+ */
 def coomiNodeJsAsset = file("src/main/assets/nodejs.zip")
-def coomiNodeVersion = "v18.19.0"
-def coomiNodeFileName = "node-${coomiNodeVersion}-linux-arm64.tar.xz"
-def coomiNodeUrl = "https://nodejs.org/dist/${coomiNodeVersion}/${coomiNodeFileName}"
+
+// Termux nodejs-lts (LTS branch, Android-compatible, compiled for Bionic libc)
+def coomiNodeVersion = "24.18.0"
+def coomiNodeDebUrl = "https://packages.termux.dev/apt/termux-main/pool/main/n/nodejs-lts/nodejs-lts_${coomiNodeVersion}_aarch64.deb"
+
+// libicu is required by Node.js for ICU support (not in the Termux bootstrap)
+def coomiLibicuVersion = "78.3"
+def coomiLibicuDebUrl = "https://packages.termux.dev/apt/termux-main/pool/main/libi/libicu/libicu_${coomiLibicuVersion}_aarch64.deb"
+
+// npm is a separate package in Termux
+def coomiNpmVersion = "11.19.0"
+def coomiNpmDebUrl = "https://packages.termux.dev/apt/termux-main/pool/main/n/npm/npm_${coomiNpmVersion}_all.deb"
 
 tasks.register("stageCoomiNodeJs") {
     group = "coomi build"
-    description = "Download Node.js ARM64 binaries and package as APK asset."
+    description = "Download Termux Node.js (Android-compatible, Bionic libc) and package as APK asset."
     outputs.file(coomiNodeJsAsset)
     doLast {
         if (coomiNodeJsAsset.exists() && coomiNodeJsAsset.length() > 0) {
@@ -223,16 +238,60 @@ tasks.register("stageCoomiNodeJs") {
         }
         def tmpDir = File.createTempDir("nodejs", "stage")
         try {
-            def tarball = new File(tmpDir, coomiNodeFileName)
-            logger.quiet("Downloading Node.js from ${coomiNodeUrl} ...")
+            // 1. Download all Termux debs
+            def nodeDeb = new File(tmpDir, "nodejs.deb")
+            logger.quiet("Downloading Termux nodejs-lts ${coomiNodeVersion} ...")
             runCmd(["curl", "-fsSL", "--connect-timeout", "30",
-                "--max-time", "300", "-o", tarball.absolutePath, coomiNodeUrl])
-            logger.quiet("Extracting ...")
-            runCmd(["tar", "-xJf", tarball.absolutePath, "--strip-components=1"], tmpDir)
+                "--max-time", "300", "-o", nodeDeb.absolutePath, coomiNodeDebUrl])
+
+            def icuDeb = new File(tmpDir, "libicu.deb")
+            logger.quiet("Downloading libicu ${coomiLibicuVersion} ...")
+            runCmd(["curl", "-fsSL", "--connect-timeout", "30",
+                "--max-time", "300", "-o", icuDeb.absolutePath, coomiLibicuDebUrl])
+
+            def npmDeb = new File(tmpDir, "npm.deb")
+            logger.quiet("Downloading npm ${coomiNpmVersion} ...")
+            runCmd(["curl", "-fsSL", "--connect-timeout", "30",
+                "--max-time", "300", "-o", npmDeb.absolutePath, coomiNpmDebUrl])
+
+            // 2. Extract all debs into a staging directory
+            def stagingDir = new File(tmpDir, "staging")
+            stagingDir.mkdirs()
+
+            [nodeDeb, icuDeb, npmDeb].each { deb ->
+                def extractDir = new File(tmpDir, "extract_" + deb.name.replaceAll(/[^a-zA-Z0-9]/, "_"))
+                extractDir.mkdirs()
+                // ar x extracts: debian-binary, control.tar.xz, data.tar.xz
+                runCmd(["ar", "x", deb.absolutePath], extractDir)
+                def dataTar = new File(extractDir, "data.tar.xz")
+                if (dataTar.isFile()) {
+                    runCmd(["tar", "-xJf", dataTar.absolutePath, "-C", stagingDir.absolutePath])
+                }
+            }
+
+            // 3. Termux debs install to ./data/data/com.termux/files/usr/
+            //    Strip this prefix and keep only the usr/ contents
+            def termuxPrefix = "data/data/com.termux/files/usr"
+            def prefixDir = new File(stagingDir, termuxPrefix)
+            if (!prefixDir.isDirectory()) {
+                throw new GradleException(
+                    "Expected Termux prefix directory not found: ${prefixDir}\n" +
+                    "Contents: ${stagingDir.list()?.join(', ')}")
+            }
+
+            def finalDir = new File(tmpDir, "final")
+            if (!prefixDir.renameTo(finalDir)) {
+                // Fallback: copy recursively
+                runCmd(["cp", "-r", prefixDir.absolutePath, finalDir.absolutePath])
+                project.delete(prefixDir)
+            }
+
             // Remove man pages and large docs to reduce APK size
-            project.delete(project.fileTree(tmpDir) { include "share/man/**", "share/doc/**" })
+            project.delete(project.fileTree(finalDir) { include "share/man/**", "share/doc/**" })
+
+            // 4. Create nodejs.zip (will be extracted to $PREFIX)
             logger.quiet("Creating nodejs.zip ...")
-            runCmd(["zip", "-r", "-q", coomiNodeJsAsset.absolutePath, "."], tmpDir)
+            runCmd(["zip", "-r", "-q", coomiNodeJsAsset.absolutePath, "."], finalDir)
             logger.quiet("nodejs.zip created: ${coomiNodeJsAsset.length()} bytes")
         } finally {
             project.delete(tmpDir)

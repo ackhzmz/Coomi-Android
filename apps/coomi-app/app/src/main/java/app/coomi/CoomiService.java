@@ -47,15 +47,16 @@ public class CoomiService extends Service {
     private static String termuxEnvironment() {
         // 注意：PATH 中 /system/bin 放在 $PREFIX/bin 前面，确保系统命令（mkdir、id 等）
         // 优先于 Termux coreutils（coreutils 可能因 DT_HASH 兼容性问题而无法链接）。
+        String p = prefix();
         return "export HOME=" + shellQuote(home())
-            + " PREFIX=" + shellQuote(prefix())
-            + " TMPDIR=" + shellQuote(prefix() + "/tmp")
-            + " PATH=/system/bin:" + shellQuote(prefix() + "/bin:/system/bin")
-            + " LD_LIBRARY_PATH=" + shellQuote(prefix() + "/lib")
+            + " PREFIX=" + shellQuote(p)
+            + " TMPDIR=" + shellQuote(p + "/tmp")
+            + " PATH=/system/bin:" + shellQuote(p + "/bin") + ":/system/bin"
+            + " LD_LIBRARY_PATH=" + shellQuote(p + "/lib")
             + " LD_PRELOAD=" + shellQuote(preload())
             + " COOMI_HOME=" + shellQuote(CoomiConstants.COOMI_CONFIG_DIR)
-            + " COOMI_SHELL=" + shellQuote(prefix() + "/bin/bash")
-            + " SSL_CERT_FILE=" + shellQuote(prefix() + "/etc/tls/cert.pem")
+            + " COOMI_SHELL=" + shellQuote(p + "/bin/bash")
+            + " SSL_CERT_FILE=" + shellQuote(p + "/etc/tls/cert.pem")
             + "; ";
     }
 
