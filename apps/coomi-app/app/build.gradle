@@ -87,7 +87,7 @@ android {
         debug {
             storeFile file('testkey_untrusted.jks')
             keyAlias 'alias'
-            // 签名口令从 local.properties 读取（不入库）；缺失时明确报错，禁止明文回退。
+            // 签名口令从 local.properties 读取（不入库）；缺失时用 Android 默认 debug 密钥。
             def signingProps = new Properties()
             def signingPropsFile = rootProject.file('local.properties')
             if (signingPropsFile.exists()) {
@@ -96,8 +96,17 @@ android {
             storePassword signingProps.getProperty('coomi.signing.storePassword')
             keyPassword signingProps.getProperty('coomi.signing.keyPassword')
             if (!storePassword || !keyPassword) {
-                throw new GradleException(
-                    '签名口令缺失：请在 local.properties 配置 coomi.signing.storePassword 与 coomi.signing.keyPassword')
+                def debugKeystore = new File(System.getProperty("user.home"), ".android/debug.keystore")
+                if (debugKeystore.isFile()) {
+                    logger.quiet("使用 Android debug keystore 签名（local.properties 未配置）")
+                    storeFile debugKeystore
+                    storePassword "android"
+                    keyAlias "androiddebugkey"
+                    keyPassword "android"
+                } else {
+                    throw new GradleException(
+                        '签名口令缺失：请在 local.properties 配置 coomi.signing.storePassword 与 coomi.signing.keyPassword')
+                }
             }
         }
     }
@@ -186,10 +195,16 @@ def coomiWebArchive = file("src/main/assets/web.zip")
 def coomiNativeDir = file("src/main/jniLibs/arm64-v8a")
 def coomiNativeBinary = new File(coomiRustRoot,
     "target/${coomiRustTarget}/release/coomi")
+// 根据宿主 OS 自动选择 NDK prebuilt 目录及可执行文件后缀（支持 Windows / Linux / macOS）。
+def coomiOsName = System.getProperty("os.name").toLowerCase(Locale.ROOT)
+def coomiNdkHost = coomiOsName.contains("windows") ? "windows-x86_64"
+    : coomiOsName.contains("mac") ? "darwin-x86_64"
+    : "linux-x86_64"
+def coomiExeExt = coomiOsName.contains("windows") ? ".cmd" : ""
 def coomiNdkToolchain = new File(android.sdkDirectory,
-    "ndk/${android.ndkVersion}/toolchains/llvm/prebuilt/windows-x86_64/bin")
+    "ndk/${android.ndkVersion}/toolchains/llvm/prebuilt/${coomiNdkHost}/bin")
 def coomiAndroidLinker = new File(coomiNdkToolchain,
-    "aarch64-linux-android${android.defaultConfig.minSdkVersion.apiLevel}-clang.cmd")
+    "aarch64-linux-android${android.defaultConfig.minSdkVersion.apiLevel}-clang${coomiExeExt}")
 
 tasks.register("installCoomiRustAndroidTarget", Exec) {
     group = "coomi build"
@@ -201,7 +216,7 @@ tasks.register("buildCoomiWeb", Exec) {
     group = "coomi build"
     description = "Build the Vue frontend served by coomi-rs."
     workingDir coomiWebRoot
-    commandLine "npm.cmd", "run", "build"
+    commandLine "npm", "run", "build"
     inputs.files(fileTree(coomiWebRoot) {
         include "src/**", "public/**", "*.json", "*.ts", "*.js", "*.html"
         exclude "node_modules/**", "dist/**"
@@ -234,8 +249,8 @@ tasks.register("buildCoomiRustAndroid", Exec) {
         "--target", coomiRustTarget, "-p", "coomi-ui", "--bin", "coomi"
     environment "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER", coomiAndroidLinker.absolutePath
     environment "CC_aarch64_linux_android", coomiAndroidLinker.absolutePath
-    environment "AR_aarch64_linux_android", new File(coomiNdkToolchain, "llvm-ar.exe").absolutePath
-    environment "RANLIB_aarch64_linux_android", new File(coomiNdkToolchain, "llvm-ranlib.exe").absolutePath
+    environment "AR_aarch64_linux_android", new File(coomiNdkToolchain, "llvm-ar${coomiExeExt}").absolutePath
+    environment "RANLIB_aarch64_linux_android", new File(coomiNdkToolchain, "llvm-ranlib${coomiExeExt}").absolutePath
     inputs.files(fileTree(coomiRustRoot) {
         include "**/src/**", "**/Cargo.toml", "Cargo.lock"
         exclude "target/**"

@@ -1,7 +1,6 @@
 package app.coomi;
 
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -11,12 +10,10 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.Build;
-import android.os.Environment;
 import android.provider.Settings;
 import android.net.Uri;
 import android.view.View;
 import android.widget.Button;
-import android.widget.ImageButton;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -40,6 +37,7 @@ public class CoomiDashboardActivity extends Activity {
     private View mStatusIndicator;
     private TextView mStatusText;
     private TextView mRuntimeVersionText;
+    private TextView mNodeJsVersionText;
     private View mOpenChatButton;
     private Button mRestartButton;
     private Button mStopButton;
@@ -57,6 +55,11 @@ public class CoomiDashboardActivity extends Activity {
     private boolean mBound = false;
     private Handler mHandler = new Handler(Looper.getMainLooper());
     private Runnable mStatusRunnable;
+    /** 缓存的 Node.js 版本（后台线程首次查询后不再重复创建进程）。 */
+    private String mNodeJsVersion = "";
+    private String mNpmVersion = "";
+    /** 缓存的运行时版本，引擎重启后清空重新获取。 */
+    private String mRuntimeVersion = "";
 
     private ServiceConnection mConnection = new ServiceConnection() {
         @Override
@@ -65,6 +68,14 @@ public class CoomiDashboardActivity extends Activity {
             mCoomiService = binder.getService();
             mBound = true;
             Logger.logDebug(LOG_TAG, "CoomiService bound");
+            // 后台查询运行时版本，避免阻塞主线程
+            new Thread(() -> {
+                String ver = mCoomiService.getRuntimeVersion();
+                if (!ver.isEmpty()) {
+                    mRuntimeVersion = ver.trim();
+                    runOnUiThread(() -> mRuntimeVersionText.setText(mRuntimeVersion));
+                }
+            }, "runtime-version").start();
             refreshStatus();
         }
 
@@ -83,6 +94,7 @@ public class CoomiDashboardActivity extends Activity {
         mStatusIndicator = findViewById(R.id.dashboard_status_indicator);
         mStatusText = findViewById(R.id.dashboard_status_text);
         mRuntimeVersionText = findViewById(R.id.dashboard_runtime_version);
+        mNodeJsVersionText = findViewById(R.id.dashboard_nodejs_version);
         mOpenChatButton = findViewById(R.id.btn_open_chat);
         mRestartButton = findViewById(R.id.btn_restart);
         mStopButton = findViewById(R.id.btn_stop);
@@ -124,7 +136,18 @@ public class CoomiDashboardActivity extends Activity {
 
         mHandler.post(mStatusRunnable);
 
-        mRuntimeVersionText.setText("coomi-rs 2.0.0");
+        // 运行时版本后续由 refreshStatus() 从引擎获取，避免硬编码
+        // 后台线程查询 Node.js 版本（避免在主线程创建进程），缓存后不再重复查询
+        new Thread(() -> {
+            String nodeVer = CoomiService.getNodeJsVersion();
+            String npmVer = CoomiService.getNpmVersion();
+            if (!nodeVer.isEmpty() && !isFinishing()) {
+                mNodeJsVersion = nodeVer;
+                mNpmVersion = npmVer;
+                runOnUiThread(() ->
+                    mNodeJsVersionText.setText("v" + nodeVer + " / npm v" + npmVer));
+            }
+        }, "node-version-check").start();
     }
 
     /** 演示包：引擎和终端都不存在，界面上直说，别让人以为它在跑。 */
@@ -132,6 +155,7 @@ public class CoomiDashboardActivity extends Activity {
         mStatusIndicator.setBackgroundResource(R.drawable.coomi_dot_idle);
         mStatusText.setText(R.string.coomi_demo_dash_status);
         mRuntimeVersionText.setText(R.string.coomi_demo_dash_runtime);
+        mNodeJsVersionText.setText("-");
         mRestartButton.setEnabled(false);
         mStopButton.setEnabled(false);
         if (mWebUiButtonContainer != null) mWebUiButtonContainer.setVisibility(View.GONE);
@@ -168,6 +192,15 @@ public class CoomiDashboardActivity extends Activity {
     // ── Status refresh ──
 
     private void refreshStatus() {
+        // 使用缓存的 Node.js 版本（后台线程首次查询），不重复创建进程
+        if (!mNodeJsVersion.isEmpty()) {
+            mNodeJsVersionText.setText("v" + mNodeJsVersion + " / npm v" + mNpmVersion);
+        }
+        // 使用缓存的运行时版本，避免每 5 秒在主线程创建进程
+        if (!mRuntimeVersion.isEmpty()) {
+            mRuntimeVersionText.setText(mRuntimeVersion);
+        }
+
         if (!mBound || mCoomiService == null) return;
 
         mCoomiService.getEngineStatus(result -> {
@@ -217,7 +250,7 @@ public class CoomiDashboardActivity extends Activity {
             }
             startActivity(intent);
         } catch (Exception error) {
-            Toast.makeText(this, "无法打开手机存储权限设置", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, R.string.coomi_dash_toast_storage_failed, Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -248,6 +281,8 @@ public class CoomiDashboardActivity extends Activity {
         }
         mRestartButton.setEnabled(false);
         mStatusText.setText(R.string.coomi_dash_engine_starting);
+        // 引擎重启后版本可能变化，清空缓存
+        mRuntimeVersion = "";
         mCoomiService.restartEngine(result -> {
             runOnUiThread(() -> {
                 mRestartButton.setEnabled(true);
@@ -258,6 +293,14 @@ public class CoomiDashboardActivity extends Activity {
                         getString(R.string.coomi_dash_toast_start_failed, result.stderr),
                         Toast.LENGTH_LONG).show();
                 }
+                // 引擎重启后在新线程重新获取运行时版本（onServiceConnected 不会再次触发）
+                new Thread(() -> {
+                    String ver = mCoomiService.getRuntimeVersion();
+                    if (!ver.isEmpty() && !isFinishing()) {
+                        mRuntimeVersion = ver.trim();
+                        runOnUiThread(() -> mRuntimeVersionText.setText(mRuntimeVersion));
+                    }
+                }, "runtime-version-restart").start();
                 refreshStatus();
             });
         });

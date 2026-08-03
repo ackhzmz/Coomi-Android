@@ -208,6 +208,27 @@
                 <View style="@style/Coomi.Divider"/>
 
                 <LinearLayout
+                    style="@style/Coomi.Row"
+                    android:background="@color/coomi_transparent">
+
+                    <TextView
+                        style="@style/Coomi.Text.Body"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/coomi_dash_nodejs"/>
+
+                    <TextView
+                        android:id="@+id/dashboard_nodejs_version"
+                        style="@style/Coomi.Text.Mono"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="-"/>
+                </LinearLayout>
+
+                <View style="@style/Coomi.Divider"/>
+
+                <LinearLayout
                     android:id="@+id/btn_open_terminal"
                     style="@style/Coomi.Row"
                     android:clickable="true"

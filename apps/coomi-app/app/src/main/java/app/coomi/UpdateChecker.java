@@ -9,6 +9,7 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Environment;
 import android.widget.Toast;
 
@@ -150,14 +151,28 @@ public final class UpdateChecker {
     private static boolean signatureMatches(Context context, File apk) {
         try {
             PackageManager pm = context.getPackageManager();
-            PackageInfo current = pm.getPackageInfo(context.getPackageName(), PackageManager.GET_SIGNATURES);
-            PackageInfo remote = pm.getPackageArchiveInfo(apk.getAbsolutePath(), PackageManager.GET_SIGNATURES);
-            if (current == null || remote == null
-                || current.signatures == null || remote.signatures == null
-                || current.signatures.length == 0 || remote.signatures.length == 0) {
-                return false;
+            String packageName = context.getPackageName();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                PackageInfo current = pm.getPackageInfo(packageName, PackageManager.GET_SIGNING_CERTIFICATES);
+                PackageInfo remote = pm.getPackageArchiveInfo(apk.getAbsolutePath(), PackageManager.GET_SIGNING_CERTIFICATES);
+                if (current == null || remote == null
+                    || current.signingInfo == null || remote.signingInfo == null) {
+                    return false;
+                }
+                android.content.pm.Signature[] currentSigs = current.signingInfo.getApkContentsSigners();
+                android.content.pm.Signature[] remoteSigs = remote.signingInfo.getApkContentsSigners();
+                if (currentSigs.length == 0 || remoteSigs.length == 0) return false;
+                return currentSigs[0].equals(remoteSigs[0]);
+            } else {
+                PackageInfo current = pm.getPackageInfo(packageName, PackageManager.GET_SIGNATURES);
+                PackageInfo remote = pm.getPackageArchiveInfo(apk.getAbsolutePath(), PackageManager.GET_SIGNATURES);
+                if (current == null || remote == null
+                    || current.signatures == null || remote.signatures == null
+                    || current.signatures.length == 0 || remote.signatures.length == 0) {
+                    return false;
+                }
+                return current.signatures[0].toCharsString().equals(remote.signatures[0].toCharsString());
             }
-            return current.signatures[0].toCharsString().equals(remote.signatures[0].toCharsString());
         } catch (Exception e) {
             return false;
         }

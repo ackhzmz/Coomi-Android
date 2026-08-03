@@ -89,6 +89,7 @@
     <string name="coomi_dash_restart">重启引擎</string>
     <string name="coomi_dash_stop">停止引擎</string>
     <string name="coomi_dash_runtime">运行时</string>
+    <string name="coomi_dash_nodejs">Node.js</string>
     <string name="coomi_dash_terminal">终端</string>
     <string name="coomi_dash_terminal_desc">打开 Termux shell</string>
     <string name="coomi_dash_tui">终端版 Coomi</string>
@@ -111,6 +112,7 @@
     <string name="coomi_dash_toast_stopped">引擎已停止</string>
     <string name="coomi_dash_toast_tui_hint">在终端里执行：coomi</string>
     <string name="coomi_dash_toast_no_browser">未找到可用的浏览器</string>
+    <string name="coomi_dash_toast_storage_failed">无法打开手机存储权限设置</string>
 
     <!-- ===== WebView 闪屏 ===== -->
     <string name="coomi_splash_hint">正在连接本机引擎…</string>

@@ -43,6 +43,7 @@ public class CoomiService extends Service {
     private static String home() { return TermuxConstants.TERMUX_HOME_DIR_PATH; }
     private static String preload() { return prefix() + "/lib/libtermux-exec-ld-preload.so"; }
 
+    /** Termux 环境变量前缀，不含 shell 命令。适用于 execTermux 和 getVersion 等静态场景。 */
     private static String termuxEnvironment() {
         return "export HOME=" + shellQuote(home())
             + " PREFIX=" + shellQuote(prefix())
@@ -57,6 +58,10 @@ public class CoomiService extends Service {
     }
 
     private CommandResult execTermux(String command) {
+        return execTermux(command, CMD_TIMEOUT_SEC);
+    }
+
+    private CommandResult execTermux(String command, int timeoutSec) {
         try {
             String shell = termuxEnvironment()
                 + "exec " + shellQuote(prefix() + "/bin/bash") + " -lc " + shellQuote(command);
@@ -68,7 +73,7 @@ public class CoomiService extends Service {
                 String line;
                 while ((line = reader.readLine()) != null) output.append(line).append('\n');
             }
-            boolean exited = process.waitFor(CMD_TIMEOUT_SEC, TimeUnit.SECONDS);
+            boolean exited = process.waitFor(timeoutSec, TimeUnit.SECONDS);
             if (!exited) process.destroyForcibly();
             int code = exited ? process.exitValue() : -1;
             return new CommandResult(code == 0, output.toString().trim(), "", code);
@@ -109,7 +114,15 @@ public class CoomiService extends Service {
     @Override
     public void onDestroy() {
         stopEngineSync();
-        mExecutor.shutdownNow();
+        mExecutor.shutdown();
+        try {
+            if (!mExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                mExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            mExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
         super.onDestroy();
     }
 
@@ -126,13 +139,88 @@ public class CoomiService extends Service {
         return new File(getApplicationInfo().nativeLibraryDir, CoomiConstants.NATIVE_BINARY_NAME);
     }
 
+    /** 查询引擎版本。失败时返回空字符串，避免向 UI 暴露原始错误信息。 */
     public String getRuntimeVersion() {
         CommandResult result = execTermux("coomi --version");
-        return result.success ? result.stdout : result.stderr;
+        if (result.success) {
+            return result.stdout;
+        }
+        Logger.logError(LOG_TAG, "Failed to get runtime version: " + result.stderr);
+        return "";
+    }
+
+    /** Install Node.js, npm, and npx via Termux's pkg manager. */
+    public CommandResult installNodeJs() {
+        // 分两步：先更新包索引，再安装 nodejs。
+        // 使用 DEBIAN_FRONTEND=noninteractive 避免交互式配置提示。
+        // execTermux 已通过 redirectErrorStream(true) 合并 stderr，命令中无需 2>&1。
+        // pkg 操作在网络慢时可能超过 30 秒，使用 120 秒超时。
+        CommandResult update = execTermux(
+            "DEBIAN_FRONTEND=noninteractive pkg update -y", 120);
+        if (!update.success) {
+            Logger.logInfo(LOG_TAG, "pkg update failed (non-fatal): " + update.stdout);
+        }
+        CommandResult install = execTermux(
+            "DEBIAN_FRONTEND=noninteractive pkg install -y nodejs", 120);
+        if (!install.success) {
+            return install;
+        }
+        // 验证 node、npm、npx 都已就绪
+        CommandResult nodeVer = execTermux("node --version");
+        if (!nodeVer.success || nodeVer.stdout.trim().isEmpty()) {
+            return new CommandResult(false, nodeVer.stdout, "node --version 返回空", -1);
+        }
+        CommandResult npmVer = execTermux("npm --version");
+        if (!npmVer.success) {
+            return new CommandResult(false, npmVer.stdout, "npm --version 失败", -1);
+        }
+        CommandResult npxVer = execTermux("npx --version");
+        if (!npxVer.success) {
+            return new CommandResult(false, npxVer.stdout, "npx --version 失败", -1);
+        }
+        Logger.logInfo(LOG_TAG, "Node.js 安装完成: node=" + nodeVer.stdout.trim()
+            + " npm=" + npmVer.stdout.trim() + " npx=" + npxVer.stdout.trim());
+        return nodeVer;
+    }
+
+    /** Check Node.js version. Returns "x.y.z" or empty string if not installed. */
+    public static String getNodeJsVersion() {
+        String version = getVersion("node --version");
+        return version.isEmpty() ? "" : version.replaceAll("^v", "");
+    }
+
+    /** Check npm version. Returns "x.y.z" or empty string if not installed. */
+    public static String getNpmVersion() {
+        return getVersion("npm --version");
+    }
+
+    /** 在 Termux 环境中执行一条版本查询命令，返回 stdout 或空字符串。 */
+    private static String getVersion(String command) {
+        try {
+            String shell = termuxEnvironment() + command;
+            ProcessBuilder builder = new ProcessBuilder("/system/bin/sh", "-c", shell);
+            builder.redirectErrorStream(true);
+            Process process = builder.start();
+            StringBuilder output = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) output.append(line);
+            }
+            boolean exited = process.waitFor(CMD_TIMEOUT_SEC, TimeUnit.SECONDS);
+            if (!exited) process.destroyForcibly();
+            if (exited && process.exitValue() == 0) {
+                return output.toString().trim();
+            }
+        } catch (Exception ignored) {}
+        return "";
     }
 
     public void deployCoomi(ProgressCallback callback) {
         mExecutor.execute(() -> {
+            if (mUpdateInProgress) {
+                callback.onError("部署已在运行中，请等待完成");
+                return;
+            }
             mUpdateInProgress = true;
             try {
                 File binary = nativeBinary();
@@ -172,6 +260,14 @@ public class CoomiService extends Service {
                     return;
                 }
                 callback.onStep(version.stdout);
+
+                callback.onStep("安装 Node.js 运行时");
+                CommandResult nodeResult = installNodeJs();
+                if (!nodeResult.success) {
+                    callback.onError("Node.js 安装失败：" + nodeResult.stdout + "\n" + nodeResult.stderr);
+                    return;
+                }
+                callback.onStep("Node.js " + nodeResult.stdout.trim());
 
                 writeShellEnvironment();
                 removeLegacyRuntimePayloads();
@@ -360,16 +456,27 @@ public class CoomiService extends Service {
     public int getEnginePort() { return mEnginePort; }
 
     public static String readEngineLogTail(int count) {
-        java.util.List<String> lines = new java.util.ArrayList<>();
+        if (count <= 0) return "";
+        // 使用环形缓冲区，避免全量读取后只取尾部 N 行
+        String[] ring = new String[count];
+        int idx = 0;
+        int total = 0;
         try (BufferedReader reader = new BufferedReader(new FileReader(CoomiConstants.ENGINE_LOG_PATH))) {
             String line;
-            while ((line = reader.readLine()) != null) lines.add(line);
+            while ((line = reader.readLine()) != null) {
+                ring[idx % count] = line;
+                idx++;
+                total++;
+            }
         } catch (Exception ignored) {
             return "";
         }
+        if (total == 0) return "";
         StringBuilder output = new StringBuilder();
-        for (int i = Math.max(0, lines.size() - count); i < lines.size(); i++) {
-            output.append(lines.get(i)).append('\n');
+        int start = total > count ? idx % count : 0;
+        int limit = Math.min(total, count);
+        for (int i = 0; i < limit; i++) {
+            output.append(ring[(start + i) % count]).append('\n');
         }
         return output.toString().trim();
     }
@@ -386,7 +493,7 @@ public class CoomiService extends Service {
         return CoomiConstants.DEFAULT_ENGINE_PORT;
     }
 
-    /** 生成 128 位十六进制随机令牌（Android 端与 WebView 共享，不落盘不写 JS）。 */
+    /** 生成 512 位（64 字节）十六进制随机令牌（Android 端与 WebView 共享，不落盘不写 JS）。 */
     private static String generateToken() {
         byte[] bytes = new byte[64];
         new java.security.SecureRandom().nextBytes(bytes);
